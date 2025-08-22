@@ -1,6 +1,7 @@
 import os
+from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
-from langchain.retrievers import SelfQueryRetriever
+from langchain.retrievers import SelfQueryRetriever, BM25Retriever, EnsembleRetriever
 from langchain.chains.query_constructor.base import AttributeInfo
 from langchain_core.runnables import ConfigurableField
 
@@ -67,3 +68,58 @@ def get_self_query_retriever(vectorstore):
             description="控制返回文档的数量"
         )
     )
+
+def get_bm25_retriever(vectorstore):
+    raw_docs = vectorstore.get(include=["documents", "metadatas"])
+    documents = [
+        Document(page_content=doc, metadata=meta)
+        for doc, meta in zip(raw_docs["documents"], raw_docs["metadatas"])
+    ]
+    return BM25Retriever.from_documents(documents=documents, k=20).configurable_fields(
+        k=ConfigurableField(
+            id="bm25_k_id",
+            name="BM25 top-k",
+            description="BM25 返回的文档数量"
+        )
+    )
+
+
+def get_ensemble_retriever(vectorstore):
+    raw_docs = vectorstore.get(include=["documents", "metadatas"])
+    documents = [
+        Document(page_content=doc, metadata=meta)
+        for doc, meta in zip(raw_docs["documents"], raw_docs["metadatas"])
+    ]
+
+    bm25_retriever = BM25Retriever.from_documents(documents=documents).configurable_fields(
+        k=ConfigurableField(
+            id="bm25_k_id", name="BM25 top-k", description="BM25 返回的文档数量"
+        )
+    )
+
+    query_llm = ChatOpenAI(
+        model=os.getenv("STD_MIGRATION_MODEL"),
+        api_key=os.getenv("STD_MIGRATION_API_KEY"),
+        base_url=os.getenv("STD_MIGRATION_URL"),
+        temperature=0
+    )
+
+    self_query_retriever = SelfQueryRetriever.from_llm(
+        llm=query_llm,
+        vectorstore=vectorstore,
+        document_contents=document_content_description,
+        metadata_field_info=metadata_field_info,
+        search_type="mmr",
+        search_kwargs={}
+    ).configurable_fields(
+        search_kwargs=ConfigurableField(
+            id="selfquery_search_kwargs", name="SelfQuery Retriever Kwargs", description="控制返回文档的数量"
+        )
+    )
+
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, self_query_retriever],
+        weights=[0.5, 0.5]
+    )
+
+    return ensemble_retriever

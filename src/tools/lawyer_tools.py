@@ -6,9 +6,10 @@ sys.path.insert(0, project_root)
 import argparse
 from fastmcp import FastMCP
 from typing import List, Dict, Any
-from langchain_community.vectorstores import Chroma
+from langchain_chroma.vectorstores import Chroma
+from langchain.retrievers import EnsembleRetriever
 from chains.lawyer_chain import get_rewrite_chain
-from utils.retriever import get_self_query_retriever
+from utils.retriever import get_self_query_retriever, get_bm25_retriever, get_ensemble_retriever
 from langchain_huggingface.embeddings.huggingface import HuggingFaceEmbeddings
 
 # HuggingFace 镜像
@@ -35,7 +36,7 @@ def get_args():
         default=8000,
         help="MCP 服务端口 (默认: 8000)"
     )
-    return parser.parse_args()
+    return parser.parse_known_args()[0]
 
 args = get_args()
 
@@ -99,6 +100,16 @@ def search_law_articles(query: str, n_results: int = 20) -> List[Dict[str, Any]]
     2. 混合查询: "В статье 8 Федерального закона 115, кто имеет право на получение вида на жительство?"
     3. 纯结构化过滤: "Содержание статьи 8 Федерального закона 'О правовом положении иностранных граждан в Российской Федерации' "
     """
+    if isinstance(retriever, EnsembleRetriever):
+        config = {
+            "configurable": {
+                "bm25_k_id": n_results * 2,
+                "selfquery_search_kwargs": {"k": n_results * 2}
+            }
+        }
+        docs = retriever.invoke(query, config=config)
+        final_docs = docs[:n_results]
+        return final_docs
     return retriever.invoke(query, config={"configurable": {"search_kwargs_id": {"k": n_results}}})
 
 

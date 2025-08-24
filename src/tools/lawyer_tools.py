@@ -7,9 +7,11 @@ import argparse
 from fastmcp import FastMCP
 from typing import List, Dict, Any
 from langchain_chroma.vectorstores import Chroma
+from langchain_core.runnables import Runnable
+from langchain_core.retrievers import BaseRetriever
 from langchain.retrievers import EnsembleRetriever
 from chains.lawyer_chain import get_rewrite_chain
-from utils.retriever import get_self_query_retriever, get_bm25_retriever, get_ensemble_retriever
+from utils.retriever import get_self_query_retriever, get_bm25_retriever, get_ensemble_retriever, get_reranking_retriever
 from langchain_huggingface.embeddings.huggingface import HuggingFaceEmbeddings
 
 # HuggingFace 镜像
@@ -29,6 +31,11 @@ def get_args():
         type=str,
         default="law_articles",
         help="ChromaDB 集合名称 (默认: law_articles)"
+    )
+    parser.add_argument(
+        "--use_reranker",
+        action="store_true",
+        help='Enable this to use reranker'
     )
     parser.add_argument(
         "--port",
@@ -53,6 +60,11 @@ retriever = get_self_query_retriever(
         embedding_function=embedding
     )
 )
+
+if args.use_reranker:
+    retriever = get_reranking_retriever(retriever)
+retriever = get_reranking_retriever(retriever)
+
 rewrite_chain = get_rewrite_chain()
 
 # 创建 MCP 服务
@@ -108,9 +120,17 @@ def search_law_articles(query: str, n_results: int = 20) -> List[Dict[str, Any]]
             }
         }
         docs = retriever.invoke(query, config=config)
-        final_docs = docs[:n_results]
-        return final_docs
-    return retriever.invoke(query, config={"configurable": {"search_kwargs_id": {"k": n_results}}})
+        return docs[:n_results]
+    elif isinstance(retriever, BaseRetriever) and not isinstance(retriever, Runnable):
+        # 普通 BaseRetriever，传入 config
+        docs = retriever.invoke(query, config={"configurable": {"search_kwargs_id": {"k": n_results}}})
+        return docs[:n_results]
+    elif isinstance(retriever, Runnable):
+        # LCEL/RunnableParallel 或 Lambda 链
+        docs = retriever.invoke({"query": query, "top_n": n_results})
+        return docs
+    else:
+        raise ValueError(f"Unsupported retriever type: {type(retriever)}")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,14 @@
 import os
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
-from langchain.retrievers import SelfQueryRetriever, BM25Retriever, EnsembleRetriever
+from langchain_core.runnables import RunnableLambda, RunnableParallel
+from langchain.retrievers import SelfQueryRetriever, EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 from langchain.chains.query_constructor.base import AttributeInfo
 from langchain_core.runnables import ConfigurableField
+from utils.ru_text_parser import lemmatize_text
 
 # --- 定义元数据模式 ---
 document_content_description = "法律条文的俄语文本内容，包含完整的法律、章节和条款上下文。例如：'Статья 2. Основные понятия ...'"
@@ -71,16 +76,68 @@ def get_self_query_retriever(vectorstore):
 
 def get_bm25_retriever(vectorstore):
     raw_docs = vectorstore.get(include=["documents", "metadatas"])
-    documents = [
-        Document(page_content=doc, metadata=meta)
-        for doc, meta in zip(raw_docs["documents"], raw_docs["metadatas"])
-    ]
-    return BM25Retriever.from_documents(documents=documents, k=20).configurable_fields(
+    documents = []
+    for doc, meta in zip(raw_docs["documents"], raw_docs["metadatas"]):
+        documents.append(Document(page_content=lemmatize_text('\n'.join(doc.split('\n')[2:])), metadata=meta))
+
+    base_retriever = BM25Retriever.from_documents(documents=documents, k=20).configurable_fields(
         k=ConfigurableField(
             id="bm25_k_id",
             name="BM25 top-k",
             description="BM25 返回的文档数量"
         )
+    )
+
+    retriever_with_lemmatize = (
+        RunnableLambda(lambda x: lemmatize_text(x) if isinstance(x, str) else x)
+        | base_retriever
+    )
+
+    return retriever_with_lemmatize
+
+
+def get_reranking_retriever(base_retriever, model_name="qilowoq/bge-reranker-v2-m3-en-ru"):
+    # 加载 tokenizer 和模型
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSequenceClassification.from_pretrained(model_name).to(device)
+    model.eval()
+
+    def rerank(inputs):
+        query, docs, k = inputs["query"], inputs["docs"], inputs["k"]
+        if not docs:
+            return []
+
+        # 构造 query-doc pairs，去除章节信息排序
+        pairs = [(query, '\n'.join(doc.page_content.split('\n')[2:])) for doc in docs]
+
+        # tokenization
+        encoded = tokenizer(
+            pairs,
+            padding=True,
+            truncation=True,
+            max_length=512,
+            return_tensors="pt"
+        ).to(model.device)
+
+        # 计算 logits
+        with torch.inference_mode():
+            logits = model(**encoded, return_dict=True).logits.view(-1)
+        
+        # 排序
+        ranked = sorted(zip(docs, logits.cpu().tolist()), key=lambda x: x[1], reverse=True)
+        return [doc for doc, _ in ranked[:k]]
+
+    return (
+        RunnableParallel({
+            "query": lambda x: x["query"],
+            "k": lambda x: x.get("k", 20),
+            "docs": lambda x: base_retriever.invoke(
+                x["query"], 
+                config={"configurable": {"search_kwargs": {"k": x.get("k", 20) * 4}}}
+            ),
+        })
+        | RunnableLambda(rerank)
     )
 
 

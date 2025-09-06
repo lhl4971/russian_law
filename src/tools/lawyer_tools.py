@@ -13,9 +13,7 @@ from langchain.retrievers import EnsembleRetriever
 from chains.lawyer_chain import get_rewrite_chain
 from utils.retriever import get_self_query_retriever, get_bm25_retriever, get_ensemble_retriever, get_reranking_retriever
 from langchain_huggingface.embeddings.huggingface import HuggingFaceEmbeddings
-
-# HuggingFace 镜像
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+from prompts import LAW_RETRIVING_REWRITE_PROMPT
 
 # --- 参数解析 ---
 def get_args():
@@ -27,10 +25,16 @@ def get_args():
         help="ChromaDB 数据库存储路径 (默认: data/chroma)"
     )
     parser.add_argument(
-        "--collection_name",
+        "--law_collection_name",
         type=str,
         default="law_articles",
-        help="ChromaDB 集合名称 (默认: law_articles)"
+        help="ChromaDB 法律条文集合名称 (默认: law_articles)"
+    )
+    parser.add_argument(
+        "--doc_list_collection_name",
+        type=str,
+        default="required_documents_lists",
+        help="ChromaDB 办理文件目录集合名称 (默认: required_documents_lists)"
     )
     parser.add_argument(
         "--use_reranker",
@@ -53,19 +57,18 @@ embedding = HuggingFaceEmbeddings(
     encode_kwargs={'normalize_embeddings': True}
 )
 
-retriever = get_self_query_retriever(
+law_retriever = get_self_query_retriever(
     Chroma(
-        collection_name=args.collection_name,
+        collection_name=args.law_collection_name,
         persist_directory=args.chroma_dir,
         embedding_function=embedding
     )
 )
 
 if args.use_reranker:
-    retriever = get_reranking_retriever(retriever)
-retriever = get_reranking_retriever(retriever)
+    law_retriever = get_reranking_retriever(law_retriever)
 
-rewrite_chain = get_rewrite_chain()
+rewrite_chain = get_rewrite_chain(LAW_RETRIVING_REWRITE_PROMPT)
 
 # 创建 MCP 服务
 mcp = FastMCP(name="LawMCPServer")
@@ -74,13 +77,13 @@ mcp = FastMCP(name="LawMCPServer")
 def rewrite_query_for_law_search(user_query: str) -> str:
     """
     这是一个强大的工具，能将用户的口语化或非标准的俄语法律查询，重写为正式、精确的法律检索查询。
-    
+
     当用户的输入包含缩写（如 "ВНЖ"）、口语化表达（如 "办居住证"）或模糊的法律术语时，
     Agent 应该优先使用此工具，以确保后续的向量检索能获得更高的匹配度和准确性。
-    
+
     Args:
         user_query (str): 用户的原始查询文本，可以是任何非正式的表述。
-        
+
     Returns:
         str: 返回经过重写后的正式俄语法律查询。
         例如："порядок получения вида на жительство"
@@ -112,25 +115,25 @@ def search_law_articles(query: str, n_results: int = 20) -> List[Dict[str, Any]]
     2. 混合查询: "В статье 8 Федерального закона 115, кто имеет право на получение вида на жительство?"
     3. 纯结构化过滤: "Содержание статьи 8 Федерального закона 'О правовом положении иностранных граждан в Российской Федерации' "
     """
-    if isinstance(retriever, EnsembleRetriever):
+    if isinstance(law_retriever, EnsembleRetriever):
         config = {
             "configurable": {
                 "bm25_k_id": n_results * 2,
                 "selfquery_search_kwargs": {"k": n_results * 2}
             }
         }
-        docs = retriever.invoke(query, config=config)
+        docs = law_retriever.invoke(query, config=config)
         return docs[:n_results]
-    elif isinstance(retriever, BaseRetriever) and not isinstance(retriever, Runnable):
+    elif isinstance(law_retriever, BaseRetriever) and not isinstance(law_retriever, Runnable):
         # 普通 BaseRetriever，传入 config
-        docs = retriever.invoke(query, config={"configurable": {"search_kwargs_id": {"k": n_results}}})
+        docs = law_retriever.invoke(query, config={"configurable": {"search_kwargs_id": {"k": n_results}}})
         return docs[:n_results]
-    elif isinstance(retriever, Runnable):
+    elif isinstance(law_retriever, Runnable):
         # LCEL/RunnableParallel 或 Lambda 链
-        docs = retriever.invoke({"query": query, "top_n": n_results})
+        docs = law_retriever.invoke({"query": query, "top_n": n_results})
         return docs
     else:
-        raise ValueError(f"Unsupported retriever type: {type(retriever)}")
+        raise ValueError(f"Unsupported retriever type: {type(law_retriever)}")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,19 @@ from langchain.retrievers import SelfQueryRetriever, EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 from langchain.chains.query_constructor.base import AttributeInfo
 from langchain_core.runnables import ConfigurableField
-from utils.ru_text_parser import lemmatize_text
+from pymorphy3 import MorphAnalyzer
+
+morph = MorphAnalyzer()
+
+def lemmatize_text(text: str) -> str:
+    tokens = []
+    for word in text.split():
+        parsed = morph.parse(word)
+        if parsed:
+            tokens.append(parsed[0].normal_form)
+        else:
+            tokens.append(word)
+    return " ".join(tokens)
 
 # --- 定义元数据模式 ---
 document_content_description = "法律条文的俄语文本内容，包含完整的法律、章节和条款上下文。例如：'Статья 2. Основные понятия ...'"

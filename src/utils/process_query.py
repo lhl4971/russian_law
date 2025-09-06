@@ -31,7 +31,7 @@ def process_text_with_case_preservation(text):
         
         # 我们可以根据需要决定如何格式化替换文本
         # 比如：返回"全称 (缩写)"
-        return f'{full_name} ({original_abbr})'
+        return f'\"{full_name} ({original_abbr})\"'
         # 或者只返回全称
         # return full_name
 

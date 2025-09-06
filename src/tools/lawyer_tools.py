@@ -3,6 +3,7 @@ import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
+import json
 import argparse
 from fastmcp import FastMCP
 from typing import List, Dict, Any
@@ -10,10 +11,10 @@ from langchain_chroma.vectorstores import Chroma
 from langchain_core.runnables import Runnable
 from langchain_core.retrievers import BaseRetriever
 from langchain.retrievers import EnsembleRetriever
-from chains.lawyer_chain import get_rewrite_chain
+from chains.lawyer_chain import get_rewrite_chain, get_doc_list_chain
 from utils.retriever import get_self_query_retriever, get_bm25_retriever, get_ensemble_retriever, get_reranking_retriever
 from langchain_huggingface.embeddings.huggingface import HuggingFaceEmbeddings
-from prompts import LAW_RETRIVING_REWRITE_PROMPT
+from prompts import LAW_RETRIVING_REWRITE_PROMPT, DOC_LIST_MATCHING_PROMPT
 
 # --- 参数解析 ---
 def get_args():
@@ -69,6 +70,10 @@ if args.use_reranker:
     law_retriever = get_reranking_retriever(law_retriever)
 
 rewrite_chain = get_rewrite_chain(LAW_RETRIVING_REWRITE_PROMPT)
+
+with open("data/processed/list_and_blanks/parsed_doc_lists.json", "r") as f:
+    doc_lists = json.load(f)
+doc_list_chain = get_doc_list_chain(DOC_LIST_MATCHING_PROMPT, doc_lists)
 
 # 创建 MCP 服务
 mcp = FastMCP(name="LawMCPServer")
@@ -134,6 +139,45 @@ def search_law_articles(query: str, n_results: int = 20) -> List[Dict[str, Any]]
         return docs
     else:
         raise ValueError(f"Unsupported retriever type: {type(law_retriever)}")
+
+
+@mcp.tool()
+def doc_list_matcher(user_query: str, doc_type: str) -> Dict:
+    """
+    根据自然语言查询和指定的申请类型（doc_type），
+    匹配最合适的办理文件清单，并返回详细的申请信息。
+
+    Args:
+        user_query (str): 自然语言查询，使用俄语，例如 “Подача на ВНЖ на основание РВПО”。
+        doc_type (str): 申请的文件类型，必须是以下之一：
+                        ["квота", "РВП", "РВПО", "ВНЖ", "Гражданство"]
+
+    Returns:
+        Dict: 包含以下字段的字典：
+            - reason (str): 工具选择该申请类型的原因（简短解释）。
+            - application_background (str): 申请依据/背景描述。
+            - required_documents_list (List[str]): 需要提交的材料清单。
+            - state_duty_law (str): 缴纳国家手续费的法律依据。
+            - receipt_form_payment (str): 缴费明细或收据模板下载链接。
+
+    功能说明:
+        该工具用于解析用户关于俄罗斯移民及入籍法律相关的自然语言问题，
+        并基于指定的申请类型（如 РВПО、РВП、ВНЖ、Гражданство 等），
+        返回办理该申请所需的完整文件清单及缴费要求。
+    """
+    response = doc_list_chain.invoke({
+        "user_query": user_query,
+        "doc_type": doc_type
+    })
+
+    doc_list = doc_lists[doc_type][response["selected_id"]]
+    return {
+        "reason": response["reason"],
+        "application_background": doc_list["text"],
+        "required_documents_list": doc_list["required_documents_list"],
+        "state_duty_law": doc_list["state_duty_law"],
+        "receipt_form_payment": doc_list["receipt_form_payment"]
+    }
 
 
 if __name__ == "__main__":

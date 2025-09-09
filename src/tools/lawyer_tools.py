@@ -144,13 +144,13 @@ def search_law_articles(query: str, n_results: int = 20) -> List[Dict[str, Any]]
 @mcp.tool()
 def doc_list_matcher(user_query: str, doc_type: str) -> Dict:
     """
-    根据自然语言查询和指定的申请类型（doc_type），
-    匹配最合适的办理文件清单，并返回详细的申请信息。
+    用于根据自然语言查询指定申请办理所需的文件清单，所需的费用以及处理申请的时长，
+    匹配最合适的办理文件清单，包括可能需要缴纳的费用，缴费明细，以及处理申请的时长。
 
     Args:
         user_query (str): 自然语言查询，使用俄语，例如 “Подача на ВНЖ на основание РВПО”。
         doc_type (str): 申请的文件类型，必须是以下之一：
-                        ["квота", "РВП", "РВПО", "ВНЖ", "Гражданство"]
+                        ["РВП", "РВПО", "ВНЖ", "Гражданство", "Гражданство (отдельные категории)"]
 
     Returns:
         Dict: 包含以下字段的字典：
@@ -159,10 +159,13 @@ def doc_list_matcher(user_query: str, doc_type: str) -> Dict:
             - required_documents_list (List[str]): 需要提交的材料清单。
             - state_duty_law (str): 缴纳国家手续费的法律依据。
             - receipt_form_payment (str): 缴费明细或收据模板下载链接。
+            - review_period (str): 审核申请时长及法律依据。
 
     功能说明:
         该工具用于解析用户关于俄罗斯移民及入籍法律相关的自然语言问题，
-        并基于指定的申请类型（如 РВПО、РВП、ВНЖ、Гражданство 等），
+        并基于指定的申请类型（如 РВПО、РВП、ВНЖ、Гражданство、Гражданство (отдельные категории) 等），
+        Гражданство (отдельные категории) 表示申请的依据基于总统令(Указ)，而不是联邦法律，
+        如果返回的文件列表中不存在"Квитанция об оплате"，意味着该类别的申请豁免国家规费，即使法律规定了一般情况需要缴纳，
         返回办理该申请所需的完整文件清单及缴费要求。
     """
     response = doc_list_chain.invoke({
@@ -176,7 +179,8 @@ def doc_list_matcher(user_query: str, doc_type: str) -> Dict:
         "application_background": doc_list["text"],
         "required_documents_list": doc_list["required_documents_list"],
         "state_duty_law": doc_list["state_duty_law"],
-        "receipt_form_payment": doc_list["receipt_form_payment"]
+        "receipt_form_payment": doc_list["receipt_form_payment"],
+        "review_period": doc_list["review_period"]
     }
 
 

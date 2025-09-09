@@ -1,4 +1,5 @@
 import json
+import asyncio
 from playwright.async_api import async_playwright
 
 async def extract_links(url):
@@ -31,4 +32,4 @@ async def main():
     print(f"已保存 {len(data)} 个链接到 data/raw/links.json")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
